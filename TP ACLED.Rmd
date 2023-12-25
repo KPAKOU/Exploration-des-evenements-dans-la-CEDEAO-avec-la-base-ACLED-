@@ -1,0 +1,314 @@
+---
+title: "TP_acled"
+author: "ganlea"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Partie 1
+## charger les librairies
+```{r}
+library(sf)
+library(ggplot2)
+library(dplyr)
+```
+
+## environnement de travail 
+```{r}
+chemin <- file.path(getwd())
+setwd(chemin)
+```
+
+## importation des données
+
+```{r}
+pays <- c("BEN", "BFA","CIV", "CPV","GHA","GIN", "GMB","GNB","LBR","MLI","MRT","NER","NGA","SEN","SLE","TGO")
+#base <- st_read("./gadm41_CIV_shp/gadm41_CIV_2.shp")
+
+# Initialisez la liste pour stocker les bases de données
+liste_bases <- list()
+
+for (p in pays) {
+  chemin_fichier <- paste0("./gadm41_", p, "_shp/gadm41_", p, "_2.shp")
+
+if (file.exists(chemin_fichier)) {
+  x <- st_read(chemin_fichier)
+  liste_bases[[length(liste_bases) + 1]] <- x
+} else { 
+  cat("Le fichier pour le pays ", p, " n'existe pas à l'emplacement spécifié.\n")
+  
+  next
+}
+
+}
+
+# Concaténez tous les résultats en un seul data frame à la fin
+base <- do.call(rbind, liste_bases)
+
+
+
+
+```
+```{r}
+ggplot(data = base) + geom_sf() 
+```
+
+
+```{r}
+evmt<-read.csv("ACLED-Western_Africa.csv")
+#transformer en dataframe contenant la geometrie
+evmt_sf <- st_as_sf(evmt, coords = c("longitude", "latitude"))
+st_crs(evmt_sf) <- 4326
+
+sf_use_s2(F)
+base_ac <- st_intersection(evmt_sf, base)
+
+```
+
+# representation
+
+```{r}
+ggplot(data = evmt_sf) + geom_sf() 
+```
+## calcul du nombre d'évenements par départements
+
+```{r}
+#base$attaque <- nrow(st_intersection(base_ac,base$geometry))
+sf_use_s2(F)
+base$attaque <- 0
+for (i in 1:nrow(base)) {
+  base$attaque[i] <- nrow(st_intersection(evmt_sf,base$geometry[i]))
+  
+}
+```
+
+## autre méthode
+
+```{r}
+base$attaque <- 0
+for (i in 1:nrow(base)) {
+  base$attaque[i] <- sum(st_intersects(evmt_sf,base$geometry[i],sparse = F))
+  
+}
+```
+
+## représentation
+
+```{r}
+
+ggplot(base) +
+  geom_sf(aes(fill = attaque)) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "attaque") +
+  theme_minimal()
+
+```
+
+#carte interactive des evenements par departements
+
+```{r}
+library(leaflet)
+
+# Créer une palette de couleurs en fonction du nombre d'attaques
+palette_couleurs <- colorQuantile("YlOrRd", domain = base$attaque)
+
+# Créer une carte Leaflet
+carte <- leaflet(data = base) %>%
+  addTiles() %>%
+  addPolygons(
+    color = "#fff",   # Couleur des bordures
+    weight = 1,          # Épaisseur des bordures
+    fillOpacity = 0.6,   # Opacité du remplissage
+    fillColor = ~palette_couleurs(base$attaque),
+    label = paste(base$NAME_2, ": ", base$attaque)  
+    
+  )
+carte
+```
+
+## aggreger les évenements par régions
+
+```{r}
+base_region <- base %>% group_by(GID_1) %>%
+  summarize(GID_0 = first(GID_0), COUNTRY = first(COUNTRY), NAME_1 = first(NAME_1), attaque = sum(attaque))
+
+            
+```
+
+## cas du cap vert
+
+```{r}
+library(dplyr)
+cvp <- st_read("./gadm41_CPV_shp/gadm41_CPV_1.shp")
+cvp <- cvp[, c("GID_1","GID_0", "COUNTRY","NAME_1")]
+
+cvp$attaque <- 0
+for (i in 1:nrow(cvp)) {
+  cvp$attaque[i] <- sum(st_intersects(evmt_sf,cvp$geometry[i],sparse = F))
+}
+
+cvp <- cvp[, c("GID_1","GID_0", "COUNTRY","NAME_1","attaque", "geometry")]
+#View(cvp)
+```
+
+## fusionner tout les pays
+
+```{r}
+base_region <- rbind(base_region, cvp)
+```
+
+
+
+```{r}
+ggplot(base_region) +
+  geom_sf(aes(fill = attaque)) +
+  geom_sf(data = evmt_sf) +  # Utilisation correcte de geom_sf avec des données spécifiques
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "attaque") +
+  theme_minimal()
+```
+
+# carte interactive des evenements par regions
+
+```{r}
+library(leaflet)
+# Créer une palette de couleurs en fonction du nombre d'attaques
+palette_couleurs <- colorQuantile("YlOrRd", domain = base_region$attaque)
+
+# Créer une carte Leaflet
+carte <- leaflet(data = base_region) %>%
+  addTiles() %>%
+  addPolygons(
+    color = "#fff",   # Couleur des bordures
+    weight = 1,          # Épaisseur des bordures
+    fillOpacity = 0.6,   # Opacité du remplissage
+    fillColor = ~palette_couleurs(base_region$attaque),
+    label = paste(base_region$NAME_1, ": ", base_region$attaque)  
+    
+  )
+carte
+```
+
+## aggreger les évenements par pays
+
+```{r}
+base_pays <- base_region %>% group_by(GID_0) %>%
+  summarize( COUNTRY = first(COUNTRY), attaque = sum(attaque))
+```
+
+
+```{r}
+ggplot(base_pays) +
+  geom_sf(aes(fill = attaque)) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "attaque") +
+  theme_minimal()
+```
+
+# carte interactive des evenements par pays
+
+```{r}
+library(leaflet)
+# Créer une palette de couleurs en fonction du nombre d'attaques
+palette_couleurs <- colorQuantile("YlOrRd", domain = base_region$attaque)
+
+# Créer une carte Leaflet
+carte <- leaflet(data = base_pays) %>%
+  addTiles() %>%
+  addPolygons(
+    color = "#fff",   # Couleur des bordures
+    weight = 1,          # Épaisseur des bordures
+    fillOpacity = 0.6,   # Opacité du remplissage
+    fillColor = ~palette_couleurs(base_pays$attaque),
+    label = paste(base_pays$COUNTRY, ": ", base_pays$attaque)  
+    
+  )
+carte
+```
+
+## partie 2
+
+# création raster
+
+```{r}
+
+library(raster)
+
+
+resolution <- 10/111
+
+base_raster2 <- raster(base_pays, res = resolution)
+#rasterize convertit une couche vectorielle en raster
+base_raster3 <-rasterize(base_ac, base_raster2, field = "id", fun="count",background =0,
+mask=F, update=T, updateValue="all", filename="", na.rm=TRUE)
+base_raster3 <- mask(base_raster3, base_pays)
+
+```
+
+
+## affichage
+
+```{r}
+palette_couleurs <- colorRampPalette(c("peachpuff", "darkorange", "darkred"))
+plot(base_raster3, col= palette_couleurs(100))
+
+
+```
+# Representation
+
+```{r}
+library(leaflet)
+# Créer une carte leaflet
+map <- leaflet() %>%
+    addProviderTiles("OpenStreetMap.Mapnik") %>%
+    addRasterImage(base_raster3, opacity = 0.7, project = FALSE) 
+ 
+# Afficher la carte interactive avec la légende
+
+map
+```
+
+## catégorisation
+
+```{r}
+n=nrow(base_ac)-sum(getValues(base_raster3), na.rm=T)
+print(paste("Il y a", n, "événements qui ne sont pas pris en compte"))
+
+```
+
+
+```{r}
+#base_raster_c <- base_raster3 >5 
+rc <- reclassify(base_raster3, c(0, 5, 0, 5, 10, 1, 10,Inf,2))
+palette_couleurs <- colorRampPalette(c("peachpuff", "darkorange", "darkred"))
+```
+
+## affichage
+
+
+```{r}
+plot(rc,col= palette_couleurs(100))
+
+```
+
+#carte interactive
+```{r}
+library(leaflet)
+
+# Créer une carte leaflet interactive
+map <- leaflet() %>%
+  addProviderTiles("OpenStreetMap.Mapnik") %>%
+  addRasterImage(rc, opacity = 0.7, project = FALSE)
+
+# Afficher la carte interactive
+map
+```
+
+
+
+
+
+
+
+
